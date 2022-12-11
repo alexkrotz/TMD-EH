@@ -23,6 +23,7 @@ if __name__ == '__main__':
     mat = initialize.initialize(mat, sim)
     sim = initialize.initialize_sim(sim)
     if sim.basis == 'kspace':
+        sim = initialize.init_kspace_basis(sim, mat)
         sim = initialize.dynamics_init_kspace(sim)
 
     if sim.basis == 'exciton':

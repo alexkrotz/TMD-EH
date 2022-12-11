@@ -75,6 +75,86 @@ def initialize(mat, sim):
     print('Finished grid initialization.')
     return mat
 
+def get_bse_eigs(sim, mat):
+    sim.b_se = (2 * sim.b_se_id - 1) / 2
+    sim.b_sh = (2 * sim.b_sh_id - 1) / 2
+    b_se = sim.b_se
+    b_sh = sim.b_sh
+    b_tau_e = sim.b_tau_e
+    b_tau_h = sim.b_tau_h
+    umk_point_list = sim.umk_point_list
+    dk_id = sim.dk_id
+    exciton_dir = sim.exciton_dir
+    num_blocks = len(umk_point_list)
+    block_dims = np.zeros(len(umk_point_list), dtype=int)
+    for b_id in range(len(umk_point_list)):
+        block_dims[b_id] = np.sum(dk_id == b_id)
+    max_block_dim = np.max(block_dims)
+    print('Looking for saved eigenstates...')
+    if not (sim.debug) and os.path.exists(exciton_dir + '/eval_block_list.npy') and os.path.exists(
+            exciton_dir + '/evec_block_list.npy') and os.path.exists(exciton_dir + '/dk_id_sort.npy'):
+        print('Found saved eigenstates')
+        eval_block_list = np.load(exciton_dir + '/eval_block_list.npy')
+        evec_block_list = np.load(exciton_dir + '/evec_block_list.npy')
+        dk_id_sort = np.load(exciton_dir + '/dk_id_sort.npy')
+    else:
+        print('Diagonalizing BSE Hamiltonian...')
+        start_time = time.time()
+        evec_block_list = np.zeros((max_block_dim, len(dk_id)), dtype=complex)  ## for storing eigenvectors
+        eval_block_list = np.zeros((len(dk_id)))  ## for storing eigenvalues
+        e_spin_block_list = np.zeros((len(dk_id)))
+        h_spin_block_list = np.zeros((len(dk_id)))
+        e_tau_block_list = np.zeros((len(dk_id)))
+        h_tau_block_list = np.zeros((len(dk_id)))
+        for dk_n in tqdm(range(len(umk_point_list))):
+            bmat = operators.H_BSE_block(dk_n, sim, mat)  # H_bse_block(dk_n, block_inds, kappa_inds, params, sys_lists)
+            se_block = b_se[dk_id == dk_n]
+            sh_block = b_sh[dk_id == dk_n]
+            te_block = b_tau_e[dk_id == dk_n]
+            th_block = b_tau_h[dk_id == dk_n]
+
+            evals, evecs = np.linalg.eigh(bmat)
+            # e_spin = np.real(np.sum(np.conj(evecs)*np.einsum('i,ij->ji',se_block,evecs),axis=1))
+            e_spin = np.real(np.sum(np.conj(evecs) * se_block[:, np.newaxis] * evecs, axis=0))
+            e_tau = np.real(np.sum(np.conj(evecs) * te_block[:, np.newaxis] * evecs, axis=0))
+            h_tau = np.real(np.sum(np.conj(evecs) * th_block[:, np.newaxis] * evecs, axis=0))
+            # h_spin = np.real(np.sum(np.conj(evecs)*np.einsum('i,ij->ji',sh_block,evecs),axis=1))
+            h_spin = np.real(np.sum(np.conj(evecs) * sh_block[:, np.newaxis] * evecs, axis=0))
+            e_spin_block_list[dk_id == dk_n] = e_spin
+            h_spin_block_list[dk_id == dk_n] = h_spin
+            e_tau_block_list[dk_id == dk_n] = e_tau
+            h_tau_block_list[dk_id == dk_n] = h_tau
+            eval_block_list[dk_id == dk_n] = evals
+            evec_block_list[:np.sum(dk_id == dk_n)][:, dk_id == dk_n] = evecs
+
+        end_time = time.time()
+        print("...took", np.round(end_time - start_time, 3), "seconds.")
+        idx = eval_block_list.argsort()
+
+        e_spin_block_list = e_spin_block_list[idx]
+        h_spin_block_list = h_spin_block_list[idx]
+        e_tau_block_list = e_tau_block_list[idx]
+        h_tau_block_list = h_tau_block_list[idx]
+        eval_block_list = eval_block_list[idx]
+        evec_block_list = evec_block_list[:, idx]
+        dk_id_sort = dk_id[idx]
+        num_exciton_states = len(eval_block_list)
+        np.save(exciton_dir + '/e_spin_block_list', e_spin_block_list)
+        np.save(exciton_dir + '/h_spin_block_list', h_spin_block_list)
+        np.save(exciton_dir + '/e_tau_block_list', e_tau_block_list)
+        np.save(exciton_dir + '/h_tau_block_list', h_tau_block_list)
+        np.save(exciton_dir + '/eval_block_list', eval_block_list)
+        np.save(exciton_dir + '/evec_block_list', evec_block_list)
+        np.save(exciton_dir + '/dk_id_sort', dk_id_sort)
+
+    sim.eval_block_list = eval_block_list
+    sim.evec_block_list = evec_block_list
+    sim.dk_id_sort = dk_id_sort
+    sim.dk_id = dk_id
+    sim.block_dims = block_dims
+
+    return sim
+
 def initialize_sim(sim):
     print('Starting simulation initialization')
     start_time = time.time()
@@ -275,6 +355,10 @@ def initialize_sim(sim):
     stop_time = time.time()
     print('took', np.round(stop_time - start_time, 3), 'seconds')
     print('Finished simulation initialization')
+
+
+
+
     return sim
 
 def get_Gab_inds_sparse(sim):
@@ -353,6 +437,17 @@ def get_Gab_inds_sparse(sim):
 
     return ke_mat_block, kh_mat_block, bvec_h_block, bvec_e_block
 
+
+def init_kspace_basis(sim, mat):
+    if os.path.exists(sim.init_dir):
+        print('Initializing ', sim.init_dir, ' for kspace basis.')
+    else:
+        print('init_dir not found')
+    if not(os.path.exists(sim.exciton_dir)):
+        os.mkdir(sim.exciton_dir)
+    sim = get_bse_eigs(sim, mat)
+    return sim
+
 def init_exciton_basis(sim, mat):
     if os.path.exists(sim.init_dir):
         print('Initializing ',sim.init_dir,' for BSE basis.')
@@ -361,77 +456,14 @@ def init_exciton_basis(sim, mat):
     if not(os.path.exists(sim.exciton_dir)):
         os.mkdir(sim.exciton_dir)
 
-    sim.b_se = (2 * sim.b_se_id - 1)/2
-    sim.b_sh = (2 * sim.b_sh_id - 1)/2
-    b_se = sim.b_se
-    b_sh = sim.b_sh
-    b_tau_e = sim.b_tau_e
-    b_tau_h = sim.b_tau_h
-    umk_point_list = sim.umk_point_list
+    sim = get_bse_eigs(sim, mat)
+    eval_block_list = sim.eval_block_list
+    evec_block_list = sim.evec_block_list
     dk_id = sim.dk_id
+    dk_id_sort = sim.dk_id_sort
+    block_dims = sim.block_dims
+    umk_point_list = sim.umk_point_list
     exciton_dir = sim.exciton_dir
-    num_blocks = len(umk_point_list)
-    block_dims = np.zeros(len(umk_point_list), dtype=int)
-    for b_id in range(len(umk_point_list)):
-        block_dims[b_id] = np.sum(dk_id == b_id)
-    max_block_dim = np.max(block_dims)
-    print('Looking for saved eigenstates...')
-    if not(sim.debug) and os.path.exists(exciton_dir + '/eval_block_list.npy') and os.path.exists(
-            exciton_dir + '/evec_block_list.npy') and os.path.exists(exciton_dir + '/dk_id_sort.npy'):
-        print('Found saved eigenstates')
-        eval_block_list = np.load(exciton_dir + '/eval_block_list.npy')
-        evec_block_list = np.load(exciton_dir + '/evec_block_list.npy')
-        dk_id_sort = np.load(exciton_dir + '/dk_id_sort.npy')
-    else:
-        print('Diagonalizing BSE Hamiltonian...')
-        start_time = time.time()
-        evec_block_list = np.zeros((max_block_dim, len(dk_id)), dtype=complex)  ## for storing eigenvectors
-        eval_block_list = np.zeros((len(dk_id)))  ## for storing eigenvalues
-        e_spin_block_list = np.zeros((len(dk_id)))
-        h_spin_block_list = np.zeros((len(dk_id)))
-        e_tau_block_list = np.zeros((len(dk_id)))
-        h_tau_block_list = np.zeros((len(dk_id)))
-        for dk_n in tqdm(range(len(umk_point_list))):
-            bmat = operators.H_BSE_block(dk_n, sim, mat)#H_bse_block(dk_n, block_inds, kappa_inds, params, sys_lists)
-            se_block = b_se[dk_id == dk_n]
-            sh_block = b_sh[dk_id == dk_n]
-            te_block = b_tau_e[dk_id == dk_n]
-            th_block = b_tau_h[dk_id == dk_n]
-
-            evals, evecs = np.linalg.eigh(bmat)
-            # e_spin = np.real(np.sum(np.conj(evecs)*np.einsum('i,ij->ji',se_block,evecs),axis=1))
-            e_spin = np.real(np.sum(np.conj(evecs) * se_block[:, np.newaxis] * evecs, axis=0))
-            e_tau = np.real(np.sum(np.conj(evecs) * te_block[:, np.newaxis] * evecs, axis=0))
-            h_tau = np.real(np.sum(np.conj(evecs) * th_block[:, np.newaxis] * evecs, axis=0))
-            # h_spin = np.real(np.sum(np.conj(evecs)*np.einsum('i,ij->ji',sh_block,evecs),axis=1))
-            h_spin = np.real(np.sum(np.conj(evecs) * sh_block[:, np.newaxis] * evecs, axis=0))
-            e_spin_block_list[dk_id == dk_n] = e_spin
-            h_spin_block_list[dk_id == dk_n] = h_spin
-            e_tau_block_list[dk_id == dk_n] = e_tau
-            h_tau_block_list[dk_id == dk_n] = h_tau
-            eval_block_list[dk_id == dk_n] = evals
-            evec_block_list[:np.sum(dk_id == dk_n)][:, dk_id == dk_n] = evecs
-
-        end_time = time.time()
-        print("...took", np.round(end_time - start_time, 3), "seconds.")
-        idx = eval_block_list.argsort()
-
-        e_spin_block_list = e_spin_block_list[idx]
-        h_spin_block_list = h_spin_block_list[idx]
-        e_tau_block_list = e_tau_block_list[idx]
-        h_tau_block_list = h_tau_block_list[idx]
-        eval_block_list = eval_block_list[idx]
-        evec_block_list = evec_block_list[:, idx]
-        dk_id_sort = dk_id[idx]
-        num_exciton_states = len(eval_block_list)
-        np.save(exciton_dir + '/e_spin_block_list', e_spin_block_list)
-        np.save(exciton_dir + '/h_spin_block_list', h_spin_block_list)
-        np.save(exciton_dir + '/e_tau_block_list', e_tau_block_list)
-        np.save(exciton_dir + '/h_tau_block_list', h_tau_block_list)
-        np.save(exciton_dir + '/eval_block_list', eval_block_list)
-        np.save(exciton_dir + '/evec_block_list', evec_block_list)
-        np.save(exciton_dir + '/dk_id_sort', dk_id_sort)
-
     N_cutoff = sim.N_cutoff
     if N_cutoff == 0:
         E_cutoff =  0#eval_block_list[-1] - eval_block_list[N_cutoff]

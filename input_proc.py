@@ -36,6 +36,7 @@ class simulation:
 
         self.exciton_dir = self.init_dir + '/rad_' + str(self.rad) + '_' + str(self.e_model) + '_' + str(
             self.ph_model) + '_' + str(valley_names)  # + '_' + str(self.N_cutoff)
+        self.init_state_num = 0
     def printInfo(self):
         print("#### SIMULATION INFO ####")
         print('Material: ',self.material)
