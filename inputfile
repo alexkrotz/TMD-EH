@@ -1,0 +1,18 @@
+material="MoS2"
+res=33
+rad=0.1 # units of 2 Pi/a
+e_model = 'tb' # 'tb' -- 2-band model 'tbb' -- 3-band model
+ph_model = '1opt' # '1ac1opt' -- 1 acoustic 1 optical idealized model
+c_spin_ind = [0, 1] # 0 is -1 1 is 1
+v_spin_ind = [0, 1]
+valley_list = ['K1', 'K2']
+temp = 1
+basis = 'exciton'
+N_cutoff = 100 # need to make sure that this number does not cause an asymmetry res=21 N_cutoff 102 works
+# res = 15 N_cutoff=52 with singlets
+# res = 27 N_cutoff=100 with triplets
+# res = 33 N_cutoff=100 with triplets (does not work with only singlets)
+# res = 33 N_cutoff=98,90 works without triplets !
+# res = 51 N_cutoff=50
+debug = False
+nprocs=8
