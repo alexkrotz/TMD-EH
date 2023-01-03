@@ -57,7 +57,6 @@ def two_band(q, tau, spin, mat):
 
 	coef_c = np.column_stack((np.ones(epsilon.size), -(a - epsilon) / (b - 1j * c - 1j * 1e-10)))
 	coef_v = np.column_stack((np.ones(epsilon.size), -(a + epsilon) / (b - 1j * c - 1j * 1e-10)))
-
 	coef_c_norms = np.apply_along_axis(np.linalg.norm, 1, coef_c)
 	coef_c /= np.column_stack((coef_c_norms, coef_c_norms))
 	coef_v_norms = np.apply_along_axis(np.linalg.norm, 1, coef_v)

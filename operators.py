@@ -5,6 +5,8 @@ from tqdm import tqdm
 import ray
 import itertools
 
+#np.random.seed(1234)
+
 @jit(nopython=True)
 def vec_single_x_array(single, array):
     single1 = np.ascontiguousarray(single) + 0.0j
@@ -26,6 +28,13 @@ def init_classical(sim):
                 p_out[osc_n, mode_n] = np.random.normal(0, np.sqrt(constants.kB * temp), 1)
                 q_out[osc_n, mode_n] = np.random.normal(0, np.sqrt(constants.kB * temp) / w_list[osc_n, mode_n], 1)
     return p_out, q_out
+
+def init_classical_parallel(sim):
+    p = np.zeros((sim.trials, len(sim.w_list[:, 0]), len(sim.w_list[0, :])))
+    q = np.zeros((sim.trials, len(sim.w_list[:, 0]), len(sim.w_list[0, :])))
+    for i in range(sim.trials):
+        p[i, :, :], q[i, :, :] = init_classical(sim)
+    return p, q
 @jit(nopython=True)
 def screened_int(k_dist, chi_2D):
     return 2 * np.pi / (k_dist * (1 + 2 * np.pi * chi_2D * k_dist))
@@ -166,9 +175,9 @@ def H_BSE_block(block_num, sim, mat):
                                                 bvec_list[bse_id_t[j_vals], be_id_t[j_vals], :, bc_id_t[j_vals]])
         out_mat[n, zero_vals] = 0.0 + 0.0j
         p_vals = ran[not_tot_bool][(same_kappa * same_espin * same_hspin)[not_tot_bool]]
-        out_mat[n, p_vals] = ((bands_list[bse_id_t[p_vals], be_id_t[p_vals], bc_id_t[p_vals]] -
-                               bands_list[bsh_id_t[p_vals], bh_id_t[p_vals], bv_id_t[p_vals]]) * constants.eV_to_Hartree -
-                             dfac * screened_int_near_zero(mat.d_k, mat.chi_2D) * mat.int_fac) * \
+        out_mat[n, p_vals] = (bands_list[bse_id_t[p_vals], be_id_t[p_vals], bc_id_t[p_vals]] -
+                               bands_list[bsh_id_t[p_vals], bh_id_t[p_vals], bv_id_t[p_vals]]) * constants.eV_to_Hartree -\
+                             dfac * screened_int_near_zero(mat.d_k, mat.chi_2D) * mat.int_fac * \
                              vec_single_x_array(bvec_list[sh1, kh1, :, vb1],
                                                 bvec_list[bsh_id_t[p_vals], bh_id_t[p_vals], :, bv_id_t[p_vals]].conj()) * \
                              vec_single_x_array(bvec_list[se1, ke1, :, cb1].conj(),
@@ -457,3 +466,75 @@ def get_dkk_Ex(eig_k, eig_j, evdiff, sim):
     dkkp = matprod(dp_mat_full, eig_k,
                    eig_j)  # np.einsum('j,hij->ih', np.conj(eig_k), np.einsum('hijk,k->hij', dp_mat_full, eig_j)) / evdiff
     return dkkq/evdiff, dkkp/evdiff
+
+##@jit(nopython=True)
+def boltz(egrid, sim):
+    if sim.temp == 0:
+        out = np.zeros_like(egrid)
+    else:
+        z = np.sum(np.exp(-1.0 * (1.0 / (constants.kB * sim.temp)) * egrid))
+        if np.abs(z) < 1e-10:
+            out = np.zeros_like(egrid)
+        else:
+            out  = (1 / z) * np.exp(-1.0 * (1.0 / (constants.kB * sim.temp)) * egrid)
+    return out
+
+
+@jit(nopython=True)
+def rho_0_adb_to_db(rho_0_adb, eigvec):
+    rho_0_db = np.dot(np.dot(np.conj(eigvec), rho_0_adb + 0.0j), eigvec.transpose())
+    return rho_0_db
+
+
+@jit(nopython=True)
+def rho_0_db_to_adb(rho_0_db, eigvec):
+    rho_0_db = np.dot(np.dot(np.conj(eigvec).transpose(), rho_0_db + 0.0j), eigvec)
+    return rho_0_db
+
+
+def vec_adb_to_db(psi_adb, eigvec):
+    # in each branch, take eigvector matrix (last two indices) and multiply by psi (a raw in a matrix):
+    psi_db = np.matmul(eigvec, psi_adb)  # np.einsum('...ij,...j', eigvec, psi_adb)
+    return psi_db
+
+
+def vec_db_to_adb(psi_db, eigvec):
+    # in each branch, take eigvector matrix (last two indices) and multiply by psi (a raw in a matrix):
+    psi_db = np.matmul(psi_db, np.conj(eigvec))  # np.einsum('...ij,...j', eigvec, psi_adb)
+    return psi_db
+
+def eC(p, q, wgrid):
+    return np.real(np.sum(((wgrid ** 2) / 2) * q ** 2 + (1 / 2) * p ** 2))
+
+
+def eQ(mat, cg):
+    return np.real(np.dot(np.conj(cg), np.dot(mat, cg.reshape((-1, 1))))[0])
+
+@jit(nopython=True)
+def RK4(p_bath, q_bath, QF, wgrid, dt):
+    Fq, Fp = QF
+    K1 = dt * (p_bath + Fp)
+    L1 = -dt * (wgrid ** 2 * q_bath + Fq)  # [wn2] is w_alpha ^ 2
+    K2 = dt * ((p_bath + 0.5 * L1) + Fp)
+    L2 = -dt * (wgrid ** 2 * (q_bath + 0.5 * K1) + Fq)
+    K3 = dt * ((p_bath + 0.5 * L2) + Fp)
+    L3 = -dt * (wgrid ** 2 * (q_bath + 0.5 * K2) + Fq)
+    K4 = dt * ((p_bath + L3) + Fp)
+    L4 = -dt * (wgrid ** 2 * (q_bath + K3) + Fq)
+    q_bath = q_bath + 0.166667 * (K1 + 2 * K2 + 2 * K3 + K4)
+    p_bath = p_bath + 0.166667 * (L1 + 2 * L2 + 2 * L3 + L4)
+    return p_bath, q_bath
+
+@jit(nopython=True)
+def nan_num(num):
+    if np.isnan(num):
+        return 0.0
+    if num == np.inf:
+        return 100e100
+    if num == -np.inf:
+        return -100e100
+    else:
+        return num
+
+
+nan_num_vec = np.vectorize(nan_num)

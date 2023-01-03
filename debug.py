@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 import diagonalize
-np.random.seed(1234)
+#np.random.seed(1234)
 def test(mat, sim):
     #H_bse = operators.H_BSE(sim, mat)
     p,q = operators.init_classical(sim)

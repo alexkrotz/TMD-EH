@@ -49,9 +49,9 @@ def initialize(mat, sim):
         eigvals = np.zeros((num_spins, len(k), num_bands))
         eigvecs = np.zeros((num_spins, len(k), num_bands, num_bands), dtype=complex)
         eigvals[0, :, 1], eigvals[0, :, 0], eigvecs[0, :, :, 1], eigvecs[0, :, :, 0] \
-            = two_band(q, tau, -1, mat)
+            = two_band_noCurve(q, tau, -1, mat)
         eigvals[1, :, 1], eigvals[1, :, 0], eigvecs[1, :, :, 1], eigvecs[1, :, :, 0] \
-            = two_band(q, tau, +1, mat)
+            = two_band_noCurve(q, tau, +1, mat)
         plots.tb_psi_plot(k, eigvecs, sim)
 
 
@@ -94,6 +94,10 @@ def get_bse_eigs(sim, mat):
     if not (sim.debug) and os.path.exists(exciton_dir + '/eval_block_list.npy') and os.path.exists(
             exciton_dir + '/evec_block_list.npy') and os.path.exists(exciton_dir + '/dk_id_sort.npy'):
         print('Found saved eigenstates')
+        e_spin_block_list = np.load(exciton_dir + '/e_spin_block_list.npy')
+        h_spin_block_list = np.load(exciton_dir + '/h_spin_block_list.npy')
+        e_tau_block_list = np.load(exciton_dir + '/e_tau_block_list.npy')
+        h_tau_block_list = np.load(exciton_dir + '/h_tau_block_list.npy')
         eval_block_list = np.load(exciton_dir + '/eval_block_list.npy')
         evec_block_list = np.load(exciton_dir + '/evec_block_list.npy')
         dk_id_sort = np.load(exciton_dir + '/dk_id_sort.npy')
@@ -106,6 +110,12 @@ def get_bse_eigs(sim, mat):
         h_spin_block_list = np.zeros((len(dk_id)))
         e_tau_block_list = np.zeros((len(dk_id)))
         h_tau_block_list = np.zeros((len(dk_id)))
+
+        #print("Diagonalizing k=0 block") res 33 rad 0.1
+        #evals, evecs = np.linalg.eigh(operators.H_BSE_block(163, sim, mat))
+        #print(evals[:20] * constants.therm_Ha / constants.eV_to_Hartree)
+        #sys.exit()
+
         for dk_n in tqdm(range(len(umk_point_list))):
             bmat = operators.H_BSE_block(dk_n, sim, mat)  # H_bse_block(dk_n, block_inds, kappa_inds, params, sys_lists)
             se_block = b_se[dk_id == dk_n]
@@ -114,6 +124,9 @@ def get_bse_eigs(sim, mat):
             th_block = b_tau_h[dk_id == dk_n]
 
             evals, evecs = np.linalg.eigh(bmat)
+            #if np.abs(evals[0]* constants.therm_Ha/constants.eV_to_Hartree - 1.5845) < 1e-4:
+            #    print(dk_n)
+            #    print(evals[:20]*constants.therm_Ha/constants.eV_to_Hartree)
             # e_spin = np.real(np.sum(np.conj(evecs)*np.einsum('i,ij->ji',se_block,evecs),axis=1))
             e_spin = np.real(np.sum(np.conj(evecs) * se_block[:, np.newaxis] * evecs, axis=0))
             e_tau = np.real(np.sum(np.conj(evecs) * te_block[:, np.newaxis] * evecs, axis=0))
@@ -138,6 +151,7 @@ def get_bse_eigs(sim, mat):
         eval_block_list = eval_block_list[idx]
         evec_block_list = evec_block_list[:, idx]
         dk_id_sort = dk_id[idx]
+
         num_exciton_states = len(eval_block_list)
         np.save(exciton_dir + '/e_spin_block_list', e_spin_block_list)
         np.save(exciton_dir + '/h_spin_block_list', h_spin_block_list)
@@ -146,13 +160,16 @@ def get_bse_eigs(sim, mat):
         np.save(exciton_dir + '/eval_block_list', eval_block_list)
         np.save(exciton_dir + '/evec_block_list', evec_block_list)
         np.save(exciton_dir + '/dk_id_sort', dk_id_sort)
-
+    print("init state energy (eV):", eval_block_list[sim.init_state_num] * constants.therm_Ha / constants.eV_to_Hartree)
+    print("init state e spin:", e_spin_block_list[sim.init_state_num])
+    print("init state h spin:", h_spin_block_list[sim.init_state_num])
+    print("init state e val.:", e_tau_block_list[sim.init_state_num])
+    print("init state h val.:", h_tau_block_list[sim.init_state_num])
     sim.eval_block_list = eval_block_list
     sim.evec_block_list = evec_block_list
     sim.dk_id_sort = dk_id_sort
     sim.dk_id = dk_id
     sim.block_dims = block_dims
-
     return sim
 
 def initialize_sim(sim):
@@ -199,7 +216,7 @@ def initialize_sim(sim):
         bvec_list = bloch_vecs_full
         bands_list = bloch_bands_full
         num_of_states = len(k)
-
+    print('Truncated grid has:',len(k), " k-points.")
     num_exciton_states = len(sim.c_spin_ind) * len(sim.c_ind) * num_of_states * len(sim.v_spin_ind) * len(sim.v_ind) * num_of_states
     e_ids = np.array(list(itertools.product(sim.c_spin_ind, sim.c_ind, np.arange(num_of_states))))
     h_ids = np.array(list(itertools.product(sim.v_spin_ind, sim.v_ind, np.arange(num_of_states))))
@@ -215,7 +232,9 @@ def initialize_sim(sim):
 
     umk_point_mat = np.zeros((num_of_states, num_of_states, 2))
     for k1 in tqdm(range(len(k))):
-        umk_point_mat[k1] = np.round(grid.k_Umklapp2(k[k1] - k, centers), 7) # wraps kappa points to first brillouin zone
+        umk_point_mat[k1] = grid.k_Umklapp2(k[k1] - k, centers) # wraps kappa points to first brillouin zone
+    umk_point_mat_orig = np.copy(umk_point_mat)
+    umk_point_mat = np.round(umk_point_mat, 9)
     umk_point_list_full = grid.adjust_grid(umk_point_mat.reshape((-num_of_states ** 2, 2)),k_full) # wrapps kappa points to the monkhorst grid
     umk_point_mat = umk_point_list_full.reshape((num_of_states, num_of_states, 2))
     umk_point_list = np.unique(umk_point_list_full, axis=0)  # unique list of kappa points
@@ -230,20 +249,47 @@ def initialize_sim(sim):
     w_list = w_list[kappa_point_inds, :]
     g_list_DP = g_list_DP[kappa_point_inds, :, :, :, :][:, np.unique(sim.phonon_modes), :, :, :][:, :, trunc_mask, :, :][:, :, :, tot_bands, :][:,:,:, :, tot_bands]
     print('# of q-points:', len(umk_point_list))
-    if os.path.exists(sim.exciton_dir + '/kappa_umk_point_mat.npy'):
+    if not(sim.debug) and os.path.exists(sim.exciton_dir + '/kappa_umk_point_mat.npy'):
         kappa_umk_point_mat = np.load(sim.exciton_dir + '/kappa_umk_point_mat.npy')
     else:
+        umk_point_list_ray = ray.put(umk_point_list)
+        @ray.remote
+        def get_kap_umk_point(k1n, umk_point_list_ray):
+            return k1n, grid.adjust_grid(np.round(grid.k_Umklapp2(umk_point_list_ray[k1n] - umk_point_list_ray, centers), 7),
+                             k_full)
         kappa_umk_point_mat = np.zeros((len(umk_point_list), len(umk_point_list), 2))
-        for k1n in tqdm(range(len(umk_point_list))):
-            kappa_umk_point_mat[k1n] = grid.adjust_grid(np.round(grid.k_Umklapp2(umk_point_list[k1n] - umk_point_list, centers), 7),
-                                               k_full)
+        ncalcs = int(len(umk_point_list) / sim.nprocs) + 1
+        for n in tqdm(range(ncalcs)):
+            rans = n * sim.nprocs + np.arange(sim.nprocs)
+            rans = rans[rans < len(umk_point_list)]
+            results = [get_kap_umk_point.remote(i, umk_point_list_ray) for i in rans]
+            for r in results:
+                i, val = ray.get(r)
+                kappa_umk_point_mat[i] = val
+        #for k1n in tqdm(range(len(umk_point_list))):
+            #kappa_umk_point_mat[k1n] = grid.adjust_grid(np.round(grid.k_Umklapp2(umk_point_list[k1n] - umk_point_list, centers), 7),
+             #                                  k_full)
+
         np.save(sim.exciton_dir + '/kappa_umk_point_mat.npy', kappa_umk_point_mat)
-    if os.path.exists(sim.exciton_dir + '/kappa_umk_ind_mat.npy'):
+    if not(sim.debug) and os.path.exists(sim.exciton_dir + '/kappa_umk_ind_mat.npy'):
         kappa_umk_ind_mat = np.load(sim.exciton_dir + '/kappa_umk_ind_mat.npy')
     else:
+        umk_point_list_ray = ray.put(umk_point_list)
+        kappa_umk_point_mat_ray = ray.put(kappa_umk_point_mat)
+        @ray.remote
+        def get_kap_umk_ind(k1n, kappa_umk_point_mat_ray, umk_point_list_ray):
+            return k1n, grid.find_index_trunc(kappa_umk_point_mat_ray[k1n], umk_point_list_ray)
         kappa_umk_ind_mat = np.zeros((len(umk_point_list), len(umk_point_list)), dtype=int)
-        for k1n in tqdm(range(len(kappa_umk_point_mat))):
-            kappa_umk_ind_mat[k1n] = grid.find_index_trunc(kappa_umk_point_mat[k1n], umk_point_list)
+        ncalcs = int(len(kappa_umk_point_mat) / sim.nprocs) + 1
+        for n in tqdm(range(ncalcs)):
+            rans = n * sim.nprocs + np.arange(sim.nprocs)
+            rans = rans[rans < len(kappa_umk_point_mat)]
+            results = [get_kap_umk_ind.remote(i, kappa_umk_point_mat_ray, umk_point_list_ray) for i in rans]
+            for r in results:
+                i, val = ray.get(r)
+                kappa_umk_ind_mat[i] = val
+        #for k1n in tqdm(range(len(kappa_umk_point_mat))):
+        #    kappa_umk_ind_mat[k1n] = grid.find_index_trunc(kappa_umk_point_mat[k1n], umk_point_list)
         np.save(sim.exciton_dir + '/kappa_umk_ind_mat.npy', kappa_umk_ind_mat)
     # full_umk_mat is a kappa matrix of the full dimension
     full_umk_mat = umk_ind_mat
@@ -253,33 +299,30 @@ def initialize_sim(sim):
     for n in range(len(sim.v_ind) * len(sim.v_spin_ind) - 1):
         full_umk_mat = np.hstack((full_umk_mat, v_full_umk_mat))
 
-    dk_ind_mat = umk_ind_mat
-    dk_point_mat = umk_point_list
+    # dk_ind_mat = umk_ind_mat
+    # dk_point_mat = umk_point_list
     # dk_sum is a list that contains the number of terms (along a side) of each block
     dk_sum = np.zeros(len(umk_point_list), dtype=int)
     for k_n in range(len(umk_point_list)):
         dk_sum[k_n] = np.sum(full_umk_mat == k_n)
     # dk_id is an index for each block
-    dk_id = np.zeros(np.sum(dk_sum), dtype=int)
-    for k_s in range(len(dk_sum)):
-        dk_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = np.zeros(dk_sum[k_s]) + k_s
     # be_id is an index for electronic states in each block where the index goes over the bands
-    be_id = np.zeros(np.sum(dk_sum), dtype=int)
+    dk_id = np.zeros(np.sum(dk_sum), dtype=int)
     be_id_1b = np.zeros(np.sum(dk_sum), dtype=int)
     b_c_band_id = np.zeros(np.sum(dk_sum), dtype=int)
     b_se_id = np.zeros(np.sum(dk_sum), dtype=int)
-    for k_s in range(len(dk_sum)):
-        be_id_1b[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 2]
-        b_c_band_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 1]
-        b_se_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 0]
-    bh_id = np.zeros(len(be_id), dtype=int)
     bh_id_1b = np.zeros(np.sum(dk_sum), dtype=int)
     b_v_band_id = np.zeros(np.sum(dk_sum), dtype=int)
     b_sh_id = np.zeros(np.sum(dk_sum), dtype=int)
     for k_s in range(len(dk_sum)):
+        dk_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = np.zeros(dk_sum[k_s]) + k_s
+        be_id_1b[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 2]
+        b_c_band_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 1]
+        b_se_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = e_ids[np.where(full_umk_mat == k_s)[0], 0]
         bh_id_1b[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = h_ids[np.where(full_umk_mat == k_s)[1], 2]
         b_v_band_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = h_ids[np.where(full_umk_mat == k_s)[1], 1]
         b_sh_id[np.sum(dk_sum[:k_s]):np.sum(dk_sum[:k_s + 1])] = h_ids[np.where(full_umk_mat == k_s)[1], 0]
+
 
     block_id_list = np.array([b_se_id, b_c_band_id, be_id_1b, b_sh_id, b_v_band_id, bh_id_1b]).transpose()
 
@@ -309,14 +352,38 @@ def initialize_sim(sim):
 
     full_ids = full_ids[singlet_states]
     num_exciton_states = len(full_ids)
-    ran = np.arange(num_exciton_states, dtype=int)
-    block_sort = np.zeros((num_exciton_states), dtype=int)
-    block_unsort = np.zeros((num_exciton_states), dtype=int)
-    for b_n in range(len(block_id_list)):
-        k_n = ran[np.all(full_ids == block_id_list[b_n], axis=1)]
-        block_sort[b_n] = k_n
-        block_unsort[k_n] = b_n
 
+    if os.path.exists(sim.exciton_dir + '/block_sort.npy') and os.path.exists(sim.exciton_dir + '/block_unsort.npy'):
+        block_sort = np.load(sim.exciton_dir + '/block_sort.npy')
+        block_unsort = np.load(sim.exciton_dir + '/block_unsort.npy')
+    else:
+        ran = np.arange(num_exciton_states, dtype=int)
+        block_sort = np.zeros((num_exciton_states), dtype=int)
+        block_unsort = np.zeros((num_exciton_states), dtype=int)
+
+        full_ids_ray = ray.put(full_ids)
+        ran_ray = ray.put(ran)
+        block_id_list_ray = ray.put(block_id_list)
+        @ray.remote
+        def get_kn(b_n, full_ids_ray, ran_ray, block_id_list_ray):
+            k_n = ran_ray[np.all(full_ids_ray == block_id_list_ray[b_n], axis=1)]
+            return b_n, k_n
+        ncalcs = int(len(block_id_list)/sim.nprocs + 1)
+        for n in tqdm(range(ncalcs)):
+            rans = n * sim.nprocs + np.arange(sim.nprocs)
+            rans = rans[rans < len(block_id_list)]
+            results = [get_kn.remote(i, full_ids_ray, ran_ray, block_id_list_ray) for i in rans]
+            for r in results:
+                b_n, k_n = ray.get(r)
+                block_sort[b_n] = k_n
+                block_unsort[k_n] = b_n
+
+        #for b_n in tqdm(range(len(block_id_list))):
+        #    k_n = ran[np.all(full_ids == block_id_list[b_n], axis=1)]
+        #    block_sort[b_n] = k_n
+        #    block_unsort[k_n] = b_n
+        np.save(sim.exciton_dir + '/block_sort.npy', block_sort)
+        np.save(sim.exciton_dir + '/block_unsort.npy', block_unsort)
     b_tau_e = tau_e[block_sort]
     b_tau_h = tau_h[block_sort]
 
@@ -344,11 +411,13 @@ def initialize_sim(sim):
     sim.dk_id = dk_id
     sim.umk_ind_mat = umk_ind_mat
     sim.umk_point_list_MK= umk_point_list
-    sim.umk_point_mat = grid.k_Umklapp(umk_point_list_full, centers).reshape(np.shape(umk_point_mat))#umk_point_mat
+    sim.umk_point_mat = grid.k_Umklapp(umk_point_list_full, centers).reshape(np.shape(umk_point_mat))
+    #sim.umk_point_mat = umk_point_mat_orig#grid.k_Umklapp(umk_point_list_full, centers).reshape(np.shape(umk_point_mat))#umk_point_mat
     sim.umk_point_list = grid.k_Umklapp(umk_point_list, centers) # wraps kappa points back to first BZ instead of Monkhorst
     sim.num_of_states = num_of_states
     sim.num_exciton_states = num_exciton_states
     sim.kappa_umk_ind_mat = kappa_umk_ind_mat
+    sim.k = k
 
 
 
@@ -374,7 +443,7 @@ def get_Gab_inds_sparse(sim):
     ran = np.arange(0, num_exciton_states)
     num_e_vals = 0
     num_h_vals = 0
-    for n in range(0,num_exciton_states):
+    for n in tqdm(range(0,num_exciton_states)):
         se1 = se_id[n]
         ke1 = ke_id[n]
         cb1 = c_band_id[n]
@@ -399,7 +468,7 @@ def get_Gab_inds_sparse(sim):
     bvec_h_mels = np.zeros((num_h_vals),dtype=complex)
     num_e_vals = 0
     num_h_vals = 0
-    for n in range(0,num_exciton_states):
+    for n in tqdm(range(0,num_exciton_states)):
         se1 = se_id[n]
         ke1 = ke_id[n]
         cb1 = c_band_id[n]
@@ -484,12 +553,13 @@ def init_exciton_basis(sim, mat):
     allow_ran = range(np.min(allow_states), np.max(allow_states) + 1)
     num_trunc_states = len(np.arange(np.min(allow_states), np.max(allow_states) + 1))  # np.max(allow_states)
     print('Number of Exciton States: ', num_trunc_states)
+    if sim.N_cutoff == 0:
+        sim.N_cutoff = num_trunc_states
     num_trunc_osc = len(umk_point_list)
     num_of_states = len(eval_block_list)
     pad_num = num_of_states ** 2 - num_trunc_states
     trunc_bse_evals = eval_block_list[allow_ran]
     trunc_bse_evecs = evec_block_list[:, allow_ran]
-
 
     @jit(nopython=True, fastmath=True)
     def get_evec(alpha):
@@ -505,7 +575,6 @@ def init_exciton_basis(sim, mat):
         evec = trunc_bse_evecs[:, alpha][:block_dims[dk_id_sort[alpha]]]
         return evec, np.arange(len(dk_ran))[dk_ran]
 
-    ke_mat_block_sparse, kh_mat_block_sparse, bvec_h_block_sparse, bvec_e_block_sparse = get_Gab_inds_sparse(sim)
     num_phonon_modes = len(sim.phonon_modes)
     block_sort = sim.block_sort
     ke_id = sim.ke_id
@@ -524,15 +593,12 @@ def init_exciton_basis(sim, mat):
     b_v_band_id = v_band_id[block_sort]
     bse_id = se_id[block_sort]
     bsh_id = sh_id[block_sort]
-
     # inds = (ke_mat_block_sparse, kh_mat_block_sparse, be_id, bh_id, b_c_band_id, b_v_band_id, bvec_e_block_sparse, bvec_h_block_sparse)
-    inds = (ke_mat_block_sparse, kh_mat_block_sparse, be_id, bh_id, b_c_band_id, b_v_band_id, bse_id, bsh_id,
-            bvec_e_block_sparse,
-            bvec_h_block_sparse)
+    ray.init(ignore_reinit_error=True, _temp_dir='/tmp/ray_tmp/')
 
-    ray_inds = ray.put(inds)
     g_inds = (sim.g_list_DP)
     g_inds_ray = ray.put(g_inds)
+    ray_sim = ray.put(sim)
 
     def get_ran(coo_mat, row_ran, col_ran): #accepts sparse matrix and dk_rans returns dense matrix in dk_rans
         row = coo_mat.row
@@ -579,11 +645,10 @@ def init_exciton_basis(sim, mat):
                 (np.dot(np.conj(evec_a), np.matmul(prod_mat_h, evec_b.reshape((-1, 1)))))
             return tot
 
-    ray.init(ignore_reinit_error=True, _temp_dir='/tmp/ray_tmp/')
-
     @ray.remote
-    def get_G_mels(ind):
-        inds = ray.get(ray_inds)
+    def get_G_mels(ind, inds):
+        #inds = ray.get(ray_inds)
+        sim = ray.get(ray_sim)
         (ke_mat_block_sparse, kh_mat_block_sparse, be_id, bh_id, b_c_band_id, b_v_band_id, bse_id, bsh_id,
          bvec_e_block_sparse, bvec_h_block_sparse) = inds
         g_inds = ray.get(g_inds_ray)
@@ -615,12 +680,14 @@ def init_exciton_basis(sim, mat):
                                        dk_ran_b)  # bvec_e_block[dk_ran_a][:,dk_ran_b]#bvec_e_block_sparse.todense()[dk_ran_a][:,dk_ran_b]#
             bvec_h_block_ran = get_ran(bvec_h_block_sparse, dk_ran_a,
                                        dk_ran_b)  # bvec_h_block[dk_ran_a][:,dk_ran_b]#bvec_h_block_sparse.todense()[dk_ran_a][:,dk_ran_b]#
-            inds_out = (ke_mat_block_ran, kh_mat_block_ran, be_id_ran, bh_id_ran, b_c_band_id_ran_1, b_v_band_id_ran_1,
-                        b_c_band_id_ran_2, b_v_band_id_ran_2, bse_id_ran_1, bsh_id_ran_1, bse_id_ran_2, bsh_id_ran_2,
-                        bvec_e_block_ran, bvec_h_block_ran)
-            G_mel_DP = get_Gab3(g_list_DP[:, sim.phonon_modes[n], :, :, :, :, :], evec_a, evec_b, kap_id, inds_out)
-            #G_mel_F = G_mel_DP
-            #G_mel_PZ = G_mel_DP
+            inds_out = (
+                ke_mat_block_ran, kh_mat_block_ran, be_id_ran, bh_id_ran, b_c_band_id_ran_1, b_v_band_id_ran_1,
+                b_c_band_id_ran_2, b_v_band_id_ran_2, bse_id_ran_1, bsh_id_ran_1, bse_id_ran_2, bsh_id_ran_2,
+                bvec_e_block_ran, bvec_h_block_ran)
+            G_mel_DP = get_Gab3(g_list_DP[:, sim.phonon_modes[n], :, :, :, :, :], evec_a, evec_b, kap_id,
+                                inds_out)
+            # G_mel_F = G_mel_DP
+            # G_mel_PZ = G_mel_DP
             # TODO ONLY DOES DP!!
             # G_mel_F = get_Gab3(g_list_F[:, phonon_modes[n], :, :, :, :, :], evec_a, evec_b, kap_id, inds_out)
             # G_mel_PZ = get_Gab3(g_list_DP[:, phonon_modes[n], :, :, :, :, :], evec_a, evec_b, kap_id, inds_out)
@@ -638,6 +705,23 @@ def init_exciton_basis(sim, mat):
         else:
             print('Adding Exciton-Phonon couplings ')
             start_time = time.time()
+            if os.path.exists(sim.exciton_dir + '/ke_mat_block_sparse.npy') and os.path.exists(
+                    sim.exciton_dir + '/kh_mat_block_sparse.npy') \
+                    and os.path.exists(sim.exciton_dir + '/bvec_h_block_sparse.npy') and os.path.exists(
+                sim.exciton_dir + '/bvec_e_block_sparse.npy'):
+                ke_mat_block_sparse = np.load(sim.exciton_dir + '/ke_mat_block_sparse.npy')
+                kh_mat_block_sparse = np.load(sim.exciton_dir + '/kh_mat_block_sparse.npy')
+                bvec_e_block_sparse = np.load(sim.exciton_dir + '/bvec_e_block_sparse.npy')
+                bvec_h_block_sparse = np.load(sim.exciton_dir + '/bvec_h_block_sparse.npy')
+            else:
+                ke_mat_block_sparse, kh_mat_block_sparse, bvec_h_block_sparse, bvec_e_block_sparse = get_Gab_inds_sparse(
+                    sim)
+            inds = (ke_mat_block_sparse, kh_mat_block_sparse, be_id, bh_id, b_c_band_id, b_v_band_id, bse_id, bsh_id,
+                    bvec_e_block_sparse,
+                    bvec_h_block_sparse)
+            ray_inds = ray.put(inds)
+
+
             need_states = len(Ex_kap_ind_mat) + np.arange(sim.N_cutoff - len(Ex_kap_ind_mat))
             abn_list_1 = np.array(list(itertools.product(sim.phonon_modes, need_states, np.arange(num_trunc_states))))
             abn_list_2 = np.array(list(itertools.product(sim.phonon_modes, np.arange(num_trunc_states), need_states)))
@@ -650,7 +734,7 @@ def init_exciton_basis(sim, mat):
             for n in tqdm(range(ncalcs)):
                 rans = n * sim.nprocs + np.arange(sim.nprocs)
                 rans = rans[rans < len(abn_list)]
-                results = [get_G_mels.remote(abn_list[i]) for i in rans]
+                results = [get_G_mels.remote(abn_list[i], ray_inds) for i in rans]
                 m = 0
                 for r in results:
                     G_mel_DP, ph_n, alpha_n, beta_n = ray.get(r)
@@ -673,21 +757,31 @@ def init_exciton_basis(sim, mat):
                 beta_n = abn_list[n][2]  # Ex_kap_ind_mat[beta_n, alpha_n]
                 Ex_kap_ind_mat[alpha_n, beta_n] = sim.kappa_umk_ind_mat[dk_id_sort[alpha_n]][dk_id_sort[beta_n]]
             np.save(exciton_dir + '/Ex_kap_ind_mat', Ex_kap_ind_mat)
-
-
-
-
-
     else:
         print('Generating Exciton-Phonon coupling...')
         start_time = time.time()
+        if os.path.exists(sim.exciton_dir + '/ke_mat_block_sparse.npy') and os.path.exists(
+                sim.exciton_dir + '/kh_mat_block_sparse.npy') \
+                and os.path.exists(sim.exciton_dir + '/bvec_h_block_sparse.npy') and os.path.exists(
+            sim.exciton_dir + '/bvec_e_block_sparse.npy'):
+            ke_mat_block_sparse = np.load(sim.exciton_dir + '/ke_mat_block_sparse.npy')
+            kh_mat_block_sparse = np.load(sim.exciton_dir + '/kh_mat_block_sparse.npy')
+            bvec_e_block_sparse = np.load(sim.exciton_dir + '/bvec_e_block_sparse.npy')
+            bvec_h_block_sparse = np.load(sim.exciton_dir + '/bvec_h_block_sparse.npy')
+        else:
+            ke_mat_block_sparse, kh_mat_block_sparse, bvec_h_block_sparse, bvec_e_block_sparse = get_Gab_inds_sparse(
+                sim)
+        inds = (ke_mat_block_sparse, kh_mat_block_sparse, be_id, bh_id, b_c_band_id, b_v_band_id, bse_id, bsh_id,
+                bvec_e_block_sparse,
+                bvec_h_block_sparse)
+        ray_inds = ray.put(inds)
         abn_list = np.array(
             list(itertools.product(sim.phonon_modes, np.arange(num_trunc_states), np.arange(num_trunc_states))))
         ncalcs = int(len(abn_list) / sim.nprocs) + 1
         for n in tqdm(range(ncalcs)):
             rans = n * sim.nprocs + np.arange(sim.nprocs)
             rans = rans[rans < len(abn_list)]
-            results = [get_G_mels.remote(abn_list[i]) for i in rans]
+            results = [get_G_mels.remote(abn_list[i], ray_inds) for i in rans]
             m = 0
             for r in results:
                 G_mel_DP, ph_n, alpha_n, beta_n = ray.get(r)
